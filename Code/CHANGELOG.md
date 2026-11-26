@@ -6,6 +6,123 @@ turned out to be wrong, so the reasoning trail stays intact.
 
 ---
 
+## 2026-11-26 - Mouth-corner and chin landmarks: measured, not implemented
+
+- True surface distance (GT skin points -> registered mesh surface, mean mm, median over 39 cases, after chin completion and nose fix): mouth corners 1.06, chin 1.42, mouth middle 1.59, nose alar 2.31, nose 3.30, cheek 0.67 (reference). The earlier node-based figures (4-5 mm) were dominated by the 6,182-node spacing, not by registration error. Midline profile (registered - GT anterior extent) is within about 1-2 mm over depth 140-200 mm.
+- A landmark-free local face ICP (depth 115-240 mm, anterior, 15-30 iterations, several smoothing settings) did not improve any band (mouth middle 4.75 -> 4.73, chin 4.18 -> 3.88 at best, with up to 29 reversed triangles for the unsmoothed setting); not adopted.
+- Outliers (any band above 4 mm in 14 of 39 cases): mouth middle/corner errors of 10-27 mm in cases 13, 16, 23, 32 come from open-mouth inputs (the scan shows the mouth cavity; the closed-mouth template stretches its lips across the gap, see /tmp pictures bad_mouth_cases). A corner/chin landmark cannot fix an open jaw. Nose alar errors of 12-21 mm in cases 26, 34, 35, 36 were not examined. Chin 7-8 mm in cases 04, 24, 41 not examined.
+
+## 2026-11-26 - Nose landmark fix for the skin registration
+
+- Finding: the registered template skin had no nose (midline profile flat; template nose tip about 35 mm too low and 7-10 mm too far back, the deformable CPD/TPS/ICP smoothed it away). Nose region error (input-skin points within 25 mm of the nose tip -> nearest registered node) 9.2 mm median over 39 cases; mouth band 4.0 mm.
+- New `py/nose_landmark.py`: `find_nose` (most anterior midline point in a depth window below the vertex; template window 100-175 mm after the skin-only alignment, input skin 70-160) and `nose_fix` (template nose-tip node moved onto the input nose tip; thin-plate RBF displacement field with nodes farther than 45 mm held at zero, then a 10-step local ICP). Wired into `hanseg_template_registration.py --skin-only` after the chin completion; `py/apply_nose_fix.py` applied it to the saved runs in place (chin-only versions in `hanseg_template_reg_skinonly_chin_only/`).
+- Result (39 cases, medians): nose region error 9.2 -> about 5.1 mm (better in 39/39 with the first setting, R 35 mm; R 45 mm chosen from a sweep on half the cases: R 25/30/35/45 give 6.1/5.6/5.5/5.1 mm), mouth band 4.0 -> about 4.6 mm (cost), 0.1-0.3% of triangles reversed near the nose. Face-region gate numbers unchanged (Chamfer 4.59 -> 4.60, HD95 12.8 -> 12.0).
+- Downstream (dataset rebuilt, leave-one-out): mandible pca-ridge 6.17 mm Chamfer / 8.3 mm chin tip (was 6.37 / 8.5); skull 7.76, brain 6.00 (was 7.78 / 5.98); case_02 full mesh skull 7.06, brain 6.99, mandible 6.67 mm. The nose fix is a surface change; it does not improve the internal predictions.
+- Limits: only the nose tip is a landmark (the shape between tip and lips comes from the template and the local ICP); the nose is a wedge, not a detailed nose; for 4 of 39 inputs the most anterior skin point is not the nose (mask/tube/other), where find_nose may still pick the correct strip point but this was not checked per case.
+
+## 2026-11-26 - Mandible added as a modelled structure; chin completion of the skin (steps 1-6)
+
+- Cut depth: a fixed deeper neck cut (250 mm) was run on all 39 cases and rejected: long necks/shoulders pull the rigid CPD off, gate failures 2 -> 7 (cases 14, 22, 23, 25, 26, 32, 37; 22/25/26 badly). Results kept in `hanseg_template_reg_skinonly_cut250_all/`. The 221 cut is the default again (`VERTEX_TO_CUT_MM`, `CUT_DEPTH` env override).
+- New `py/chin_complete.py` (also called from `hanseg_template_registration.py --skin-only`; `py/apply_chin_completion.py` applied it to the saved 221 runs): after the fit, the nodes below the neck cut are pulled onto the nearest input-skin points (smoothed ICP field, cap 60 mm, 40 iterations); active nodes never move, so the gate metrics are unchanged (gate now scored on the face/head above 221 mm; whole-skin values logged). Chin/jaw node error (depth > 180 mm, anterior) over 39 cases: mean 1.2-4.3 mm (was 3.6-20.7 mm at the 221 cut). Side effect: 0.1-0.4% of skin triangles reverse in the chin region. New point array `active_completed`; all 6,182 skin nodes are now reliable (was 6,003). Old skin-only runs: `hanseg_template_reg_skinonly_cut221/`.
+- Mandible: `fe_structures` / `load_gt` now include `mandible` (FE: all mandible solids' outer envelope, 624 nodes; GT: `mandible_bone.stl`). `python hanseg_template_registration.py case_XX --only=mandible` registers only the mandible into `hanseg_template_reg/case_XX/case_XX_mandible_*`. case_02: Chamfer 4.06 mm, HD95 5.0 (the first attempt with only the 393-node `mandible_external` shell gave 6.1 / 9.2). The earlier skull structure never contained a mandible: the jaw was only dragged along by the TPS (case_02 chin tip 48 mm too low).
+- Shape dataset rebuilt (`shape_dataset/`, previous in `shape_dataset_v1_before_mandible/`): 39 cases, mandible 624 reliable nodes; `shape_predict.load_struct`; `predict_new_subject.py` predicts the mandible with its own PCA-ridge + calibration, uses it as TPS controls and in sigma_mm.
+- `py/validate_mandible.py` (leave-one-out, 38 cases, median Chamfer mm / chin-tip error mm): oracle 4.16 / 4.7; template carried by the skin warp (previous behaviour) 28.9 / 38.4; mean shape 8.62 / 14.5; multi-atlas 6.96 / 10.8; pca-ridge 6.37 / 8.5 (worst 48.9). pca-ridge beats mean shape in 32/38, template in 38/38.
+- Skull/brain re-validated on the new dataset: pca-ridge 7.78 / 5.98 mm (was 7.90 / 6.05); rank correlation of predicted sigma vs error -0.55 (not investigated).
+- case_02 full pipeline: skull 7.09, brain 6.87, mandible 6.66 mm Chamfer; chin tip 5.5 mm from the true one (z -903.4 vs -897.9); untangled (tau 0.2, 449 -> 0 inverted hexes, below 0.1: 7). `untangle_mesh.py` skin ids corrected to the real skin parts (167-172, 221-236).
+
+## 2026-11-26 - Chin shift in the predicted head: cause and cut-depth experiment
+
+- Cause: skin-only registration cuts the neck at vertex - 221 mm and deactivates the template skin below it. In case_02 that leaves the template chin/under-chin nodes (about 50 of 6,182, depth 221-271 mm) unfitted: 12 mm mean (max 47 mm) from the GT skin there, so the skin-reliability mask drops them and the predictor never sees the chin; predicted mandible chin tip is 48 mm too low and 22 mm too far back (z -945.7 vs -897.9, y 15 vs -7).
+- `hanseg_template_registration.py`: env overrides `CUT_DEPTH` (mm below vertex, default 221) and `OUT_TAG` (output folder suffix) for experiments; defaults unchanged.
+- Cut 250 on 6 cases (chin/jaw nodes mean error mm, 221 -> 250): case_02 11.9 -> 2.1, case_05 17.9 -> 1.0, case_07 20.7 -> 1.4, case_12 10.5 -> 4.1, case_28 7.3 -> 4.8, case_32 3.6 -> 5.3. Upper face/head unchanged (about 1.0-1.15 mm). Cost: template neck is stretched (lowest node 296-316 mm below vertex instead of 226-271) and the HD95 gate fails for case_12 and case_32 (previous cut passed). Cut 235 on case_02 barely helps (10.4 mm). Results in `Data/outputs/hanseg_template_reg_skinonly_cut250/` and `_cut235/`; the default skin-only outputs are untouched.
+- A midline-profile chin detector (anterior extent of the midline skin by depth) was tried on all 40 GT skins: spread of detected - mandible-bottom depth 20 mm (fixed rule: 13.5 mm), so not adopted.
+
+## 2026-11-25 - Untangling ported from MaiAlgo; collapsed-hex check corrected
+
+- New `py/untangle_mesh.py`: port of MaiAlgo notebook section 15 (local L-BFGS-B repair of hexes with corner scaled Jacobian < 0.1 and one ring of neighbours, spring to the predicted position, 20x stiffer on skin, move cap 5 mm interior / 1.5 mm skin). Uses `mesh_qa_jacobian` connectivity; `python untangle_mesh.py <predicted_head.vtu>` writes `*_untangled.vtu` (+ `untangle_move_mm`).
+- `mesh_qa_jacobian.assess` corrected: collapsed hexes are now judged on their still-hexahedral corners (template wedges/tets are positive at all of them). The centroid-proxy sign test gave false positives on 6-node wedges, so earlier counts were too high.
+- case_02 truly inverted hexes (template 2), before -> after untangling: smoothing 1000: 451 -> 0 (max move 2.71 mm, skin 0.73 mm); 3000: 14 -> 0 (1.57 mm); 10000: 8 -> 0 (1.20 mm). Smoothing 0.001: 10,381 (not repaired). Earlier statement "443-1,053 inverted at every smoothing" is wrong.
+- case_12 (smoothing 1000): 823 -> 0 inverted, max move 1.71 mm; case_37: 53 -> 0, max move 1.21 mm (about 9 min each when run in parallel). `py/measure_untangle_effect.py`: skull/brain surface Chamfer and HD95 are unchanged (max difference 0.01 mm) for case_02 (3 smoothings), case_12, case_37.
+- tau 0.2 on case_02 (smoothing 1000, `--tau 0.2`, 270 s, file `*_untangled_tau0.2.vtu`): 0 inverted, elements below 0.1: 2253 -> 326 (tau 0.1) -> 2 (tau 0.2); below 0.2: 8,005 -> 8,401 -> 3,300 (template itself: 168 / 1,076). Max move 4.91 mm (skin 1.93 mm); skull Chamfer 7.10 -> 7.10, brain 7.16 -> 7.17 mm.
+- Not yet checked: elements below 0.1 remain (case_02 326 at smoothing 1000, case_12 2,169, case_37 870); the other 36 cases; LS-DYNA acceptance.
+
+## 2026-11-24 — HaN-Seg template registration, skin-only alignment, shape predictors (new scripts in `py/`)
+
+**Files (new):** `py/hanseg_template_registration.py`, `py/build_shape_dataset.py`, `py/shape_predict.py`,
+`py/validate_shape_predictors.py`. The notebooks above are no longer the working path.
+
+**Registration** (`hanseg_template_registration.py`, `<case>` or `<case> --skin-only`): FE skin/skull/brain each
+registered to the case's GT. Rigid CPD (w=0; w>0 shrank the template to ~15%), target and source trimming of points with no
+counterpart (>25 mm), guarded affine CPD (singular values clamped to 0.8-1.25, falls back to rigid), deformable CPD, TPS,
+ICP, then a blend toward the TPS result (blending toward the unaligned pose caused fold-over). Chin-based neck cut
+(17 mm below the lowest mandible point) applied to the GT and, at the same Z after the first rigid fit, to the FE skin.
+Skin quality gate: Chamfer < 6 mm, HD95 < 15 mm, < 0.1% folded triangles; Hausdorff logged, not gated.
+
+**Findings**
+- The 35 mm skin Hausdorff is the template having no nape skin (open, slanted neck edge), not a jaw problem.
+- The ~20 mm brain HD95 is the FE brain's internal fissure/fold surfaces lying inside the GT brain (all far nodes
+  inside the GT volume); GT->FE brain error is ~3 mm. Interior brain nodes are masked unreliable in the dataset.
+- `--skin-only` alignment (fixed axis map, scale/position from the top 100 mm of the head, neck cut 221 mm below the
+  vertex) passes the gate on 37/40 cases vs 35/40 with the skull/mandible-aided alignment; case_09 fails because the
+  fixed vertex-to-cut distance (sd 13.5 mm) put its cut 33 mm too low. case_09 excluded by decision, not fixed.
+- Chamfer cannot detect node-correspondence sliding. case_04's skull is rotated ~41-48 deg relative to its skin in
+  node correspondence while both fit their GT; excluded from training, cause not found.
+
+**Predictors** (leave-one-out, 38 cases, vs GT surfaces in the held-out case's frame, median Chamfer mm):
+skull / brain: oracle (own registration) 5.77 / 2.87, template carried by skin warp 17.8 / 15.0, mean shape 8.90 / 6.92,
+multi-atlas 8.16 / 6.44, PCA-ridge 7.90 / 6.05. PCA-ridge beats the mean in 32/38 and 34/38 cases. Skin-to-skull depth
+error is not improved over the mean (2.8 vs 2.6 mm). Predicted sigma is population-level (same for every query), so it
+does not rank cases by difficulty (rank correlation -0.11).
+
+**Case-specific uncertainty** (`shape_predict.py`: `query_stats`, `fit_calibration`, `pca_ridge_predict(..., calib)`):
+sigma_node x b x exp(a x max(z, 0)), z = how far the query skin's shape unexplained by the 8 skin modes sits above the
+training skins' (the best single predictor of a case's error, Spearman +0.42; leverage +0.25 n.s.; multi-atlas spread
+-0.01 so not used). (a, b) fitted by maximum likelihood on the training fold's own leave-one-out predictions; nested
+leave-one-out on 38 cases: node coverage of the 95% interval 0.89 -> 0.93, cases under 0.90 coverage 11 -> 8 of 38,
+worst case 0.24 -> 0.44, rank correlation sigma vs error -0.11 -> +0.33. Improvement is real but modest; scale factor
+ranges 0.93-1.53x the population sigma.
+
+**Step 5 dry run** (`py/predict_new_subject.py <case>`): held-out HaN-Seg case as the "new subject" (only its skin-only
+registration is used, case removed from training; no real SAM3D skin exists on disk yet). Predict skull/brain with
+case-specific sigma, apply a cavity constraint, propagate to all 179,676 FE nodes with one TPS (2,500+2,500+1,500
+controls), write `<case>_predicted_head.vtu` with `sigma_mm` and `radius95_mm`, run `k_mesh_qa` against the template.
+- First cavity constraint was wrong: 9.9% of the TEMPLATE's own brain nodes fail it (skull base, where the external
+  skull shell is open), so 1,386 predicted nodes were pushed up to 19 mm for nothing. Now checked only on the 11,497
+  nodes the template keeps inside; 682-761 predicted nodes (6-7%) still violate and are moved up to ~17 mm, i.e. the
+  independently predicted skull and brain are not mutually consistent.
+- Inverted elements (k_mesh_qa): template alone 7,117 (inherited, not from this work). TPS smoothing 0.001 -> 12.0-17.1k
+  (5.7-10.8k new); 1 -> 12.8k; 100 -> 10.5k; 1000 -> 7.1-7.3k (342-546 new); 3000 -> 7.1k (252 new); 10000 -> 7.1k (208).
+  Chosen 1000: surface Chamfer cost small (case_02 skull 7.11 -> 7.10, brain 6.37 -> 7.16). New inversions concentrate in
+  gray matter, CSF and white matter of cerebrum/cerebellum (thin layers).
+- Held-out surface check, smoothing 1000 (Chamfer mm skull / brain): case_02 7.10 / 7.16, case_12 6.81 / 8.07,
+  case_37 6.45 / 6.41 - consistent with the leave-one-out figures.
+- (Superseded by the next entry: the 7,117 "template inversions" were a k_mesh_qa artifact, and the smoothing sweep above
+  used that flawed count.)
+
+## 2026-11-24 (later) — Head_V6 "7,117 inverted elements" are mostly not inverted; real defects repaired
+
+**Files (new):** `py/mesh_qa_jacobian.py` (checker), `py/repair_template.py`, `Data/mesh_model/Head_V6_repaired.vtu`
+(+ `_log.txt`). `k_mesh_qa.py` and `Head_V6.vtu` are untouched.
+
+**Finding.** `k_mesh_qa.check_mesh` votes on the sign of a centroid volume proxy per part. Of its 7,121 flagged hexes,
+4,113 are collapsed hexes (8,669 have 4 distinct nodes, 4,088 have 6; valid by design) and 3,008 are normal hexes with a
+positive Jacobian at all 8 corners. By corner Jacobian the template has 2 genuinely negative full hexes
+(CSF_Cerebrum_R elem 88062653, CSF_Cerebrum_L 88159140; scaled Jacobian -0.045) and 4 ~zero-volume collapsed wedges
+(CSF_Stem_R 88074992, 88075010; CSF_Stem_L 88171465, 88171483). All earlier "inverted element" counts in this project
+(7,698 etc.) used the flawed metric. Whether LS-DYNA accepts the collapsed hexes was not tested here (assumed valid, as
+they are part of the original model).
+
+**Repair.** Local search on the 6 elements' own nodes only (34 nodes moved, max 0.112 mm, topology unchanged, no neighbour
+made worse than min(old quality, 0.05)). Result: 0 negative corners, worst scaled Jacobian 0.005 (the two CSF_Cerebrum
+hexes are still near-degenerate, 4 hexes below 0.05), the 4 wedges now have positive volume relative to their siblings.
+
+**Propagation re-scored with the correct metric** (case_02, repaired template, truly inverted hexes of 176,441):
+smoothing 0.001: 11,239; 1: 11,105; 100: 6,697; 1000: 1,053 (worst -0.535); 3000: 542 (worst -0.187);
+10000: 443 (worst -0.037). The persistent ~440 are concentrated in Superior_Sagittal_Sinus and skin, not yet examined.
+Surface Chamfer (skull/brain mm): 1000: 7.10/7.16; 3000: 7.28/7.58; 10000: 7.55/8.03. Smoothing 1000 is NOT mesh-safe.
+
+---
+
 ## 2026-07-13 — Tried and reverted: per-node bone-thickness stretch cap
 
 **File:** `CPD_TPS_Skin_Only_Registration.ipynb`, geometry-loading + save-outputs cells
@@ -654,3 +771,15 @@ Next things worth trying, in rough priority order:
    cluster in the same region as the residual-error hot spot (would confirm
    it's the same root cause) or are scattered (would suggest a separate
    local mesh-density issue, e.g. TPS control points too sparse there).
+
+## Mouth-misfit flag and the nose-alar / chin outliers
+
+- `mouth_flag.py`: from the input skin and the registered skin only, takes the input points in a mouth band (midline +-30 mm, 12-60 mm below the nose tip) and their true distance to the registered surface; flag if the 95th percentile exceeds 9 mm. Written to `summary.json['mouth_misfit']` and the log by `hanseg_template_registration.py --skin-only`; `apply_mouth_flag.py` added it to the 39 saved results. Flagged: case_12, 13, 23, 34 (p95 9.9-11.5 mm). Cases 16 and 32 (open mouths) stay below the threshold (p95 6-7 mm), so the flag says "lips/chin misfit", not "open mouth"; the cause is not identified.
+- Nose alar: the median input-to-mesh distance is 0.8-3.1 mm in every case; the 12-21 mm quoted earlier were maxima. 95th percentiles are 3-10 mm (largest 26, 34, 31, 06). No outlier case to fix.
+- Chin: medians 0.4-3.9 mm. Real node-level errors: case_04 (30 chin nodes 8-25 mm off, crumpled; the case already left out of training), and under-chin/neck nodes 18-29 mm off in cases 30, 35, 36, 41 (below the face region that the gate scores). Cases 16, 23, 32, 34 have chin 95th percentiles of 12-17 mm from input points the mesh does not cover.
+- Why 12 and 34 flag: in the midline slice the input "skin" has a sheet running back from the lips (the mouth/oral-cavity interior surface), and the flagged band points are those 10-28 mm behind the lip plane (case_12 median offset +27 mm posterior, 14 mm below nose; case_34 +28 mm, 49 mm below). The closed-lip template has no cavity, so these points are far from it. Case_13 shows the same. The flag therefore detects "input contains oral-cavity surface (lips parted)", not a lip-position error. Picture: /tmp/halfcut/mouth_flag_12_34.png.
+- Mouth interior removed from the flag: `mouth_interior_mask` marks input points in the mouth band that lie >8 mm behind the frontmost skin surface in their own front-to-back line (3 mm cells), and `mouth_misfit` scores without them (picture /tmp/halfcut/mouth_interior_removed.png). Result: case_12 p95 9.9 -> 5.7, case_34 10.3 -> 5.5 (they were flagged only because of interior points); remaining highest are case_23 8.0 and case_13 7.8, all others <= 6.7. Threshold lowered to 7.5 mm (set by eye from these 39 cases, so it is not independently validated); flagged now: 13, 23. The registration target itself still contains the interior points; not changed.
+- Mouth interior removed from the flag: `mouth_interior_mask` marks input points in the mouth band that lie >8 mm behind the frontmost skin surface in their own front-to-back line (3 mm cells); `mouth_misfit` scores without them (picture /tmp/halfcut/mouth_interior_removed.png). Case_12 p95 9.9 -> 5.7 and case_34 10.3 -> 5.5 (they flagged only because of interior points). Highest now: case_23 8.0, case_13 7.8; all others <= 6.7. Threshold set to 7.5 mm by eye from these 39 cases (not independently validated); flagged: 13, 23. The registration target itself still contains the interior points (unchanged).
+
+## Brain Dice (leave-one-out, skin-only prediction vs CT brain segmentation)
+`py/dice_brain_loo.py`: predicted brain surface (PCA-ridge, trained without the case; nodes lacking reliable GT carried by TPS) voxelised at 2 mm and compared with the HaN-Seg `case_XX_brain.stl` brought into the dataset frame through the skin. 38 cases: Dice mean 0.924, median 0.925, range 0.885-0.947 (worst case_34, case_32). Mean-shape baseline (same skin-based placement): mean 0.905, range 0.853-0.934. Predicted volume 1,085-1,393 mL vs CT 1,037-1,506 mL. Not computed for the similarity.vtp demo (no CT).
