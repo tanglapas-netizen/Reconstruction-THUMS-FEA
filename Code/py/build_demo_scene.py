@@ -5,7 +5,6 @@ items = [("similarity_input_skin.vtp", "Input skin (similarity.vtp)", (0.8, 0.8,
          ("similarity_registered_skin.vtp", "Registered FE skin", (1.0, 0.6, 0.1), 0.3, False),
          ("similarity_pred_skull.vtp", "Predicted skull", (0.95, 0.95, 0.85), 0.45, True),
          ("similarity_pred_brain.vtp", "Predicted brain", (0.85, 0.5, 0.5), 0.9, True),
-         ("similarity_pred_mandible.vtp", "Predicted mandible", (0.5, 0.7, 0.9), 0.9, True),
          ("similarity_FE_head_untangled.vtu", "FE head (sigma_mm)", (1, 1, 1), 1.0, False)]
 flip = vtk.vtkMatrix4x4(); flip.SetElement(0, 0, -1); flip.SetElement(1, 1, -1)
 tr = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLLinearTransformNode", "LPS_to_RAS"); tr.SetMatrixTransformToParent(flip)

@@ -22,13 +22,6 @@ def load(drop=()):
     return z['cases'][keep], skin, y, int(sl.sum())          # y: (n, Nskull+Nbrain, 3)
 
 
-def load_struct(name, drop=()):
-    """Same cases/skin as load(), but one named structure ('mandible', ...) as the target: (cases, skin, y, n_nodes)."""
-    z = np.load(f'{DS}/shape_dataset.npz'); keep = np.array([c not in drop for c in z['cases']])
-    m = z[f'{name}_reliable']
-    return z['cases'][keep], z['skin'][keep][:, z['skin_reliable']], z[name][keep][:, m], int(m.sum())
-
-
 def multi_atlas(skin_tr, y_tr, skin_q, k=K_ATLAS):
     d = np.sqrt(((skin_tr - skin_q) ** 2).sum(2).mean(1))       # RMS node distance to each atlas
     idx = np.argsort(d)[:k]; w = 1 / d[idx] ** 2; w /= w.sum()

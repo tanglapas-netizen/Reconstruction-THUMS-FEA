@@ -19,7 +19,7 @@ import mesh_qa_jacobian as Q
 h.FE_VTU = '/Volumes/Extreme SSD/2d_3d_regis dataset/New_version/Data/mesh_model/Head_V6_repaired.vtu'   # template with its 6 real defects repaired
 
 BASE = '/Volumes/Extreme SSD/2d_3d_regis dataset/New_version/Data/outputs'
-N_CTRL = dict(skin=1500, skull=2500, brain=2500, mandible=800)
+N_CTRL = dict(skin=1500, skull=2500, brain=2500)
 MIN_MARGIN_MM = 2.0
 EXCLUDE_TRAIN = ('case_09', 'case_04')
 
@@ -65,7 +65,7 @@ def mesh_qa(vtu_points, template):
 def main(case, smooth=1000.0, tag=''):
     out = f'{BASE}/predict_demo/{case}{tag}'; os.makedirs(out, exist_ok=True); log = []
     z = np.load(f'{sp.DS}/shape_dataset.npz'); cases = [str(c) for c in z['cases']]
-    sr, kr, br, mr = z['skin_reliable'], z['skull_reliable'], z['brain_reliable'], z['mandible_reliable']
+    sr, kr, br = z['skin_reliable'], z['skull_reliable'], z['brain_reliable']
     tr = [i for i, c in enumerate(cases) if c != case and c not in EXCLUDE_TRAIN]
     skin_tr = z['skin'][tr][:, sr]; y_tr = np.concatenate([z['skull'][tr][:, kr], z['brain'][tr][:, br]], axis=1)
     ns = int(kr.sum())
@@ -80,10 +80,6 @@ def main(case, smooth=1000.0, tag=''):
     m = sp.pca_ridge_fit(skin_tr, y_tr); calib = sp.fit_calibration(skin_tr, y_tr)
     pred, sigma = sp.pca_ridge_predict(m, skin_q, calib); pred = to_raw(pred)
     skull_p, brain_p = pred[:ns], pred[ns:]
-    # mandible: its own PCA-ridge model on the same skin input, own calibration
-    y_m = z['mandible'][tr][:, mr]; mm = sp.pca_ridge_fit(skin_tr, y_m); calib_m = sp.fit_calibration(skin_tr, y_m)
-    mand_p, sigma_m = sp.pca_ridge_predict(mm, skin_q, calib_m); mand_p = to_raw(mand_p)
-    log.append(f'mandible: calibration a={calib_m[0]:.2f} b={calib_m[1]:.2f}; sigma mean {sigma_m.mean():.2f} mm')
     log.append(f'calibration a={calib[0]:.2f} b={calib[1]:.2f}; sigma mean {sigma.mean():.2f} mm '
                f'(skull {sigma[:ns].mean():.2f}, brain {sigma[ns:].mean():.2f}); 95% radius = {np.sqrt(sp.CHI95):.2f} x sigma')
 
@@ -106,13 +102,12 @@ def main(case, smooth=1000.0, tag=''):
     rng = np.random.default_rng(0); pick = lambda n, k: rng.choice(n, min(k, n), replace=False)
     si, ki, bi = np.where(sr)[0], np.arange(ns), np.where(br)[0]
     ps, pk, pb = pick(len(si), N_CTRL['skin']), pick(len(ki), N_CTRL['skull']), pick(len(bi), N_CTRL['brain'])
-    mand_t = T['mandible'][mr]; pm = pick(len(mand_t), N_CTRL['mandible'])
-    src = np.vstack([T['skin'][si[ps]], skull_t[pk], brain_t[pb], mand_t[pm]]); dst = np.vstack([P[si[ps]], skull_full[pk], brain_c[pb], mand_p[pm]])
+    src = np.vstack([T['skin'][si[ps]], skull_t[pk], brain_t[pb]]); dst = np.vstack([P[si[ps]], skull_full[pk], brain_c[pb]])
     tps = RBFInterpolator(src, dst, kernel='thin_plate_spline', smoothing=smooth)
     X = np.asarray(fe.points, float); new = np.vstack([tps(X[a:a + 20000]) for a in range(0, len(X), 20000)])
 
     # 5. uncertainty field on every node: sigma of the nearest predicted skull/brain node
-    sig_pts = np.vstack([skull_t, brain_t, mand_t]); node_sigma = np.concatenate([sigma, sigma_m])[cKDTree(sig_pts).query(X)[1]]
+    sig_pts = np.vstack([skull_t, brain_t]); node_sigma = sigma[cKDTree(sig_pts).query(X)[1]]
     res = fe.copy(); res.points = new
     res.point_data['sigma_mm'] = node_sigma; res.point_data['radius95_mm'] = np.sqrt(sp.CHI95) * node_sigma
     res.save(f'{out}/{case}_predicted_head.vtu')
@@ -123,11 +118,11 @@ def main(case, smooth=1000.0, tag=''):
         nid2idx = {int(v): i for i, v in enumerate(fe.point_data['node_id'])}
         got = lambda k, mask: new[[nid2idx[int(v)] for v in np.asarray(S[k].point_data['node_id'])[mask]]]
         tg = lambda k: np.load(f'{BASE}/hanseg_template_reg/{case}/{case}_{k}_target_trimmed.npy')
-        sc = {'skull': got('skull', kr), 'brain': got('brain', br), 'mandible': got('mandible', mr)}
+        sc = {'skull': got('skull', kr), 'brain': got('brain', br)}
         from validate_shape_predictors import chamfer_hd95
         for k in sc:
             c, p95 = chamfer_hd95(sc[k], tg(k)); log.append(f'GT check [{k}] full-mesh surface nodes: Chamfer {c:.2f} mm, HD95 {p95:.1f} mm')
-        s_a = np.linalg.norm(np.vstack([sc['skull'], sc['brain'], sc['mandible']]) - np.vstack([skull_full[:, :], brain_c, mand_p]), axis=1)
+        s_a = np.linalg.norm(np.vstack([sc['skull'], sc['brain']]) - np.vstack([skull_full[:, :], brain_c]), axis=1)
         log.append(f'TPS reproduces the predicted surfaces: median shift {np.median(s_a):.2f} mm, max {s_a.max():.1f} mm')
 
     # 7. mesh QA with the Jacobian-based checker (k_mesh_qa's majority-vote proxy mis-flags collapsed hexes; kept as 'legacy')

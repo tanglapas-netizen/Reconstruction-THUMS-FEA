@@ -49,9 +49,7 @@ def fe_structures(fe, names, pid):
     skull = [k for k, n in names.items()
              if '_external_' in n and n.startswith(SKULL_INCLUDE) and 88000001 <= k <= 88000099]
     brain = [k for k, n in names.items() if n.startswith(('Pia_Cerebrum', 'Pia_Cerebellum', 'Pia_Sagittal'))]
-    mandible = [k for k, n in names.items() if n.startswith('mandible') and 'shell' not in n and 88000001 <= k <= 88000099]   # all mandible solids -> outer envelope
-    s = {'skin': fe_surface(fe, pid, skin), 'skull': fe_surface(fe, pid, skull), 'brain': fe_surface(fe, pid, brain),
-         'mandible': fe_surface(fe, pid, mandible)}
+    s = {'skin': fe_surface(fe, pid, skin), 'skull': fe_surface(fe, pid, skull), 'brain': fe_surface(fe, pid, brain)}
     refs = {'cranium': by_prefix('frontal', 'parietal', 'temporal', 'occipital'),
             'face': by_prefix('maxilla', 'nasal', 'zygomatic', 'lacrimal'),
             'mandible': by_prefix('mandible')}
@@ -69,7 +67,7 @@ def load_gt(case):
     skull = pv.merge([outer] + face, merge_points=False)
     refs = {'cranium': rd('skull_cranium').points.mean(0), 'face': np.vstack([m.points for m in face]).mean(0),
             'mandible': rd('mandible_bone').points.mean(0), 'mandible_pts': rd('mandible_bone').points}
-    return {'skin': rd('skin_surface'), 'skull': skull, 'brain': rd('brain'), 'mandible': rd('mandible_bone')}, refs
+    return {'skin': rd('skin_surface'), 'skull': skull, 'brain': rd('brain')}, refs
 
 
 # ---------------------------------------------------------------- initial alignment
@@ -224,16 +222,12 @@ def flipped_triangles(surf, ref_pts, new_pts):
     return int((cos < 0).sum()), len(f)
 
 
-def main(case, skin_only=False, only=None):
+def main(case, skin_only=False):
     out = f"{OUT_ROOT}_skinonly{os.environ.get('OUT_TAG', '')}/{case}" if skin_only else f'{OUT_ROOT}/{case}'; os.makedirs(out, exist_ok=True); log = []
     fe, names, pid = load_fe(); fe_s, fe_ref = fe_structures(fe, names, pid)
     if skin_only:
         fe_s = {'skin': fe_s['skin']}
         gt_s = {'skin': pv.read(f'{GT_ROOT}/{case}/stl/{case}_skin_surface.stl')}
-        if os.environ.get('KEEP_MOUTH_INTERIOR', '0') != '1':   # drop the inside-of-mouth surface from the target (mouth_flag.mouth_interior_mask)
-            from mouth_flag import mouth_interior_mask
-            _P = np.asarray(gt_s['skin'].points, float); _m = mouth_interior_mask(_P); gt_s['skin'] = pv.PolyData(_P[~_m])
-            log.append(f'mouth interior removed from the input skin: {int(_m.sum())} of {len(_P)} points')
         f, R, scale = skin_only_alignment(np.asarray(fe_s['skin'].points, dtype=float), np.asarray(gt_s['skin'].points, dtype=float))
     else:
         gt_s, gt_ref = load_gt(case)
@@ -242,7 +236,6 @@ def main(case, skin_only=False, only=None):
     log.append(f'init: rotation {ang:.1f} deg, scale {scale:.3f}')
     log.append('FE->GT axis map (rows = GT x,y,z; cols = FE x,y,z):\n' + np.array2string(np.round(R, 2)))
 
-    if only: fe_s = {k: v for k, v in fe_s.items() if k in only}; gt_s = {k: v for k, v in gt_s.items() if k in only}   # e.g. --only=mandible (initial alignment above still used the skull)
     mv = {k: np.asarray(f(np.asarray(v.points, dtype=float))) for k, v in fe_s.items()}
     fx = {k: np.asarray(v.points, dtype=float) for k, v in gt_s.items()}
     active = {k: np.ones(len(mv[k]), bool) for k in mv}
@@ -307,12 +300,11 @@ def main(case, skin_only=False, only=None):
             log.append(f'GATE skin: {"PASS" if g["passed"] else "FAIL"} {g["checks"]} | GT skin >{COVER_GAP_MM:.0f} mm from FE: '
                        f'{g["coverage_gap_pct"]:.1f}% (neck band {g["coverage_gap_neck_band_pct"]:.1f}%, '
                        f'elsewhere {g["coverage_gap_elsewhere_pct"]:.1f}%); Hausdorff {g["hausdorff_logged"]:.1f} not gated')
-    tag = ('_' + '_'.join(only)) if only else ''
-    json.dump(summary, open(f'{out}/{case}{tag}_summary.json', 'w'), indent=1)
-    open(f'{out}/{case}{tag}_log.txt', 'w').write('\n'.join(log))
+    json.dump(summary, open(f'{out}/{case}_summary.json', 'w'), indent=1)
+    open(f'{out}/{case}_log.txt', 'w').write('\n'.join(log))
     print('\n'.join(log))
     for k, rows in summary.items():
-        if k in ('gate', 'skin_face_region'): continue
+        if k in ('gate', 'skin_face_region', 'mouth_misfit'): continue
         print(f'\n== {k} ==')
         print(f'{"stage":20s} {"mean":>7s} {"median":>7s} {"hd95":>7s} {"chamfer":>8s} {"hausd":>7s}')
         for st, r in rows.items():
@@ -322,5 +314,4 @@ def main(case, skin_only=False, only=None):
 
 if __name__ == '__main__':
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
-    only = next((a.split('=')[1].split(',') for a in sys.argv if a.startswith('--only=')), None)
-    main(args[0] if args else 'case_02', skin_only='--skin-only' in sys.argv, only=only)
+    main(args[0] if args else 'case_02', skin_only='--skin-only' in sys.argv)
